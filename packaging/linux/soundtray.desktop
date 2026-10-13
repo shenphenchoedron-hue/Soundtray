@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Soundtray
+GenericName=Musikafspiller
+Comment=En lille og let playlist-afspiller
+Exec=Soundtray
+Icon=soundtray
+Terminal=false
+Categories=AudioVideo;Audio;Player;

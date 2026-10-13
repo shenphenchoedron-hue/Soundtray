@@ -1,0 +1,114 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+      - name: Configure
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Package (installer)
+        working-directory: build
+        run: cpack -C Release -G NSIS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: build/Soundtray-*-Windows-Setup.exe
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Strip & ad-hoc sign
+        run: |
+          APP=build/Soundtray_artefacts/Release/Soundtray.app
+          strip -x "$APP/Contents/MacOS/Soundtray"
+          codesign --force --deep --sign - "$APP"
+      - name: Package (DMG)
+        working-directory: build
+        run: cpack -G DragNDrop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: build/Soundtray-*-macOS.dmg
+
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu
+            suffix: ubuntu22.04
+            image: ubuntu:22.04
+          - name: debian
+            suffix: debian12
+            image: debian:12
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git ca-certificates pkg-config dpkg-dev file \
+            libasound2-dev libfreetype6-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+            libxinerama-dev libxrandr-dev libxrender-dev
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DSOUNDTRAY_PKG_SUFFIX=${{ matrix.suffix }}
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Package (.deb)
+        working-directory: build
+        run: cpack -G DEB
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: build/soundtray_*.deb
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -la dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            | System | Fil | Installation |
+            |---|---|---|
+            | **Windows** 10/11 (64-bit) | `Soundtray-*-Windows-Setup.exe` | Dobbeltklik og følg guiden. Opretter genvej i Start-menuen og på skrivebordet. Afinstalleres via *Indstillinger → Apps*. |
+            | **macOS** 11+ (Apple Silicon & Intel) | `Soundtray-*-macOS.dmg` | Åbn DMG-filen og træk **Soundtray** over i **Programmer**. Første gang: højreklik på appen → *Åbn* (appen er ikke notariseret af Apple). |
+            | **Ubuntu** 22.04 / 24.04+ | `soundtray_*_ubuntu22.04_amd64.deb` | `sudo apt install ./soundtray_*_ubuntu22.04_amd64.deb` |
+            | **Debian** 12+ | `soundtray_*_debian12_amd64.deb` | `sudo apt install ./soundtray_*_debian12_amd64.deb` |
+
+            Afinstallation på Linux: `sudo apt remove soundtray`
